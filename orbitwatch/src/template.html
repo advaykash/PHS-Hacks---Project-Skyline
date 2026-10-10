@@ -1,0 +1,360 @@
+<title>OrbitWatch</title>
+<meta name="description" content="OrbitWatch: see tracked satellites and space debris around Earth, computed from public orbital data.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Mission control: the globe fills the screen; a toolbar on top, a tabbed console on the left
+   (a bottom sheet on phones). One deliberate dark theme. */
+:root{
+  --bg:#03060c; --panel:rgba(7,12,24,.92); --panel-2:rgba(255,255,255,.04); --panel-3:rgba(255,255,255,.08);
+  --line:rgba(122,162,255,.16); --line-2:rgba(122,162,255,.32);
+  --text:#e4ebfa; --muted:#97a6c4; --dim:#6b7a98;
+  --accent:#5aa9ff; --accent-soft:rgba(90,169,255,.14); --accent-mid:rgba(90,169,255,.3);
+  --c-active:#4cc3ff; --c-inactive:#b4bfd4; --c-rocket:#ffd166; --c-debris:#ff7a45; --c-sim:#ff5fd2;
+  --c-a:#36e0d0; --c-b:#ffb547; --c-you:#ff5d73;
+  --ok:#5ee3a0; --warn:#ffcc66; --bad:#ff6b81;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --bar-h:56px; --side-w:368px; --gap:12px; --radius:10px;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);overflow:hidden}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+a{color:var(--accent)}
+.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+small{font-size:12px}
+
+/* canvas + overlays */
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#c:active{cursor:grabbing}
+#ring,.mk{position:fixed;width:24px;height:24px;margin:-12px 0 0 -12px;border:2px solid #fff;border-radius:50%;pointer-events:none;display:none;z-index:2}
+#ring i,.mk i{position:absolute;left:28px;top:1px;font:500 12px var(--sans);font-style:normal;white-space:nowrap;text-shadow:0 1px 3px #000,0 0 2px #000}
+#ring.left i,.mk.left i{left:auto;right:28px}
+.mk.a{border-color:var(--c-a)} .mk.a i{color:var(--c-a)}
+.mk.b{border-color:var(--c-b)} .mk.b i{color:var(--c-b)}
+.hl{position:fixed;transform:translate(8px,-50%);font:500 11px var(--sans);color:#eaf6ff;background:rgba(7,12,24,.78);border:1px solid var(--line-2);border-radius:6px;padding:1px 6px;white-space:nowrap;cursor:pointer;z-index:2}
+.hl:hover{background:var(--accent-mid)}
+#tip{position:fixed;z-index:6;pointer-events:none;background:var(--panel);border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;font-size:12px;display:none;max-width:260px}
+#tip b{display:block;font-weight:600}
+
+/* toolbar */
+#bar{position:fixed;left:0;right:0;top:0;z-index:10;display:flex;align-items:center;gap:10px;
+  padding:calc(env(safe-area-inset-top,0px) + 8px) 16px 8px;min-height:var(--bar-h);
+  background:linear-gradient(rgba(3,6,12,.94),rgba(3,6,12,.78));border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+.brand{display:flex;align-items:baseline;gap:10px;min-width:0;flex:0 1 auto}
+.brand h1{flex:none}
+.brand h1{margin:0;font-size:18px;font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.brand h1 span{color:var(--accent)}
+.brand p{margin:0;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-2);background:var(--panel-2);border-radius:999px;padding:3px 10px;font:500 11px var(--mono);letter-spacing:.3px;cursor:pointer;white-space:nowrap}
+#badge:hover{background:var(--accent-soft)}
+#badge .d{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+#badge[data-mode=live] .d,#badge[data-mode=hosted] .d{background:var(--ok)} #badge[data-mode=stale] .d{background:var(--bad)} #badge[data-mode=cached] .d,#badge[data-mode=snapshot] .d{background:var(--warn)} #badge[data-mode=demo] .d{background:var(--c-sim)}
+.search{position:relative;flex:1 1 260px;max-width:380px;margin-left:auto}
+.search input{width:100%;background:rgba(255,255,255,.06);border:1px solid var(--line-2);border-radius:8px;padding:7px 10px 7px 32px;outline:none}
+.search input:focus{border-color:var(--accent);background:rgba(255,255,255,.09)}
+.search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.6}
+#qres{position:absolute;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line-2);border-radius:8px;max-height:min(60vh,380px);overflow:auto;z-index:20}
+#qres li{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer}
+#qres li[aria-selected=true],#qres li:hover{background:var(--accent-soft)}
+#qres li small{color:var(--muted)}
+#qres .empty{display:block;color:var(--muted);cursor:default}
+.tools{display:flex;gap:6px}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--panel-2);border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;cursor:pointer;white-space:nowrap;line-height:1.2}
+.btn:hover{background:var(--accent-soft);border-color:var(--accent-mid)}
+.btn.on,.btn[aria-pressed=true]{background:var(--accent-mid);border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#04101f;font-weight:600}
+.btn.primary:hover{background:#7bbcff}
+.btn.danger{border-color:rgba(255,95,210,.45)} .btn.danger:hover{background:rgba(255,95,210,.18)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.sm{padding:3px 8px;font-size:12px}
+.row-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+
+/* console panel */
+#side{position:fixed;z-index:5;left:var(--gap);top:calc(var(--bar-top,64px) + var(--gap));bottom:calc(var(--gap) + env(safe-area-inset-bottom,0px));width:var(--side-w);
+  display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);backdrop-filter:blur(8px);min-height:0}
+#tabs{display:flex;gap:2px;padding:6px 6px 0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none;flex:none}
+#tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:7px 10px 8px;color:var(--muted);cursor:pointer;font-weight:500;white-space:nowrap}
+#tabs button[aria-selected=true]{color:var(--text);border-bottom-color:var(--accent)}
+#tabs button:hover{color:var(--text)}
+.pane{padding:12px 14px 16px;overflow:auto;flex:1;min-height:0}
+.pane[hidden]{display:none}
+h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1.1px;color:var(--muted);margin:18px 0 8px}
+.pane>h2:first-child{margin-top:2px}
+h3{font-size:15px;margin:0}
+p{margin:6px 0}
+.note{color:var(--muted);font-size:12px}
+.tag{display:inline-block;font:500 10px var(--mono);letter-spacing:.6px;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;vertical-align:1px}
+.tag.sim{color:var(--c-sim)} .tag.approx{color:var(--warn)} .tag.real{color:var(--ok)} .tag.no{color:var(--dim)}
+.card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:10px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin-top:8px}
+.kv span{color:var(--muted)} .kv b{font:500 13px var(--mono);font-variant-numeric:tabular-nums}
+.list{display:flex;flex-direction:column;gap:4px}
+.item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;background:var(--panel-2);border:1px solid transparent;cursor:pointer;text-align:left;width:100%}
+.item:hover{background:var(--panel-3);border-color:var(--line)}
+.item small{color:var(--muted)}
+.item .r{text-align:right;font-family:var(--mono);font-size:12px;white-space:nowrap}
+.dot{display:inline-block;width:10px;height:10px;flex:none}
+.legend{display:grid;gap:4px}
+.legend label{display:flex;align-items:center;gap:8px;cursor:pointer;padding:3px 0}
+.legend .cnt{margin-left:auto;color:var(--muted);font:12px var(--mono)}
+.legend .sw{width:22px;height:2px;flex:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.stats .st:first-child{grid-column:1/-1}
+.st{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:7px 8px}
+.st b{display:block;font:600 17px var(--mono);font-variant-numeric:tabular-nums}
+.st span{font-size:11px;color:var(--muted)}
+.bars{display:flex;flex-direction:column;gap:6px}
+.bar-row{display:grid;grid-template-columns:48px 1fr 60px;gap:8px;align-items:center;font-size:12px}
+.bar-row .track{height:8px;background:var(--panel-2);border-radius:4px;overflow:hidden}
+.bar-row .fill{height:100%;background:var(--accent)}
+.bar-row .n{text-align:right;font-family:var(--mono);color:var(--muted)}
+#hist{width:100%;height:150px;display:block;cursor:crosshair;border-radius:6px}
+#gt{width:100%;aspect-ratio:2/1;display:block;border-radius:8px;background:#0b2a52}
+.insight{border-left:3px solid var(--accent);padding:4px 0 4px 10px;margin:8px 0}
+.warnbox{border:1px solid rgba(255,204,102,.4);background:rgba(255,204,102,.07);border-radius:8px;padding:8px 10px;font-size:12px}
+.sep{height:1px;background:var(--line);margin:14px 0}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+
+/* time strip */
+#time{position:fixed;z-index:5;right:var(--gap);top:calc(var(--bar-top,64px) + var(--gap));display:flex;flex-direction:column;align-items:flex-end;gap:6px;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:6px 8px;backdrop-filter:blur(8px);max-width:calc(100vw - var(--side-w) - 3*var(--gap))}
+#clk{font:500 12px var(--mono);white-space:nowrap}
+#tmode{font:500 10px var(--mono);letter-spacing:.6px;padding:1px 6px;border-radius:4px;border:1px solid currentColor;white-space:nowrap}
+#tmode.live{color:var(--ok)} #tmode.lapse{color:var(--warn)} #tmode.paused{color:var(--muted)}
+#spd{display:flex;gap:4px}
+#time .trow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+#filt{display:flex;align-items:center;justify-content:flex-end;gap:8px}#filt[hidden]{display:none}
+#dstat{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 8px;max-width:560px;margin-left:auto;text-align:right}#dstat[hidden]{display:none}
+#dstat .note{color:var(--warn)}
+
+/* overlays */
+.overlay{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(2,4,9,.6)}
+.overlay[hidden]{display:none}
+.dialog{background:#081022;border:1px solid var(--line-2);border-radius:12px;max-width:640px;width:100%;max-height:min(86vh,820px);overflow:auto;padding:22px 22px 18px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.dialog h2{margin-top:20px}
+.dialog .x{float:right}
+.dialog table{width:100%;border-collapse:collapse;font-size:13px}
+.dialog td,.dialog th{border-bottom:1px solid var(--line);padding:6px 4px;text-align:left;vertical-align:top}
+.dialog th{color:var(--muted);font-weight:500}
+.tablewrap{overflow-x:auto}
+.lead{font-size:16px;color:var(--text)}
+.pitch{display:grid;gap:8px;margin:14px 0}
+.pitch div{display:grid;grid-template-columns:110px 1fr;gap:10px}
+.pitch b{color:var(--accent);font-weight:600}
+#loading{position:fixed;z-index:8;left:50%;top:50%;transform:translate(-50%,-50%);width:min(380px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line-2);border-radius:12px;padding:16px}
+#loading[hidden]{display:none}
+.prog{height:4px;background:var(--panel-3);border-radius:2px;overflow:hidden;margin:10px 0}
+.prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+#glfail{position:fixed;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,calc(100vw - 32px))}
+#tour{position:fixed;z-index:25;right:var(--gap);bottom:calc(var(--gap) + env(safe-area-inset-bottom,0px));width:min(360px,calc(100vw - 2*var(--gap)));background:#081022;border:1px solid var(--accent-mid);border-radius:12px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+#tour[hidden]{display:none}
+#tour .steps{display:flex;gap:4px;margin-bottom:8px}
+#tour .steps i{flex:1;height:3px;border-radius:2px;background:var(--panel-3)}
+#tour .steps i.on{background:var(--accent)}
+.flash{animation:flash 1.4s ease 2}
+@keyframes flash{50%{box-shadow:0 0 0 3px var(--accent)}}
+#toast{position:fixed;z-index:40;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#0c1730;border:1px solid var(--line-2);border-radius:8px;padding:8px 14px;font-size:13px;display:none;max-width:calc(100vw - 32px)}
+.chip-band{display:none;align-items:center;gap:6px;margin-top:8px}
+
+@media (max-width:1100px){:root{--side-w:330px}.brand p{display:none}.brand{flex:none}}
+@media (max-width:720px){
+  :root{--gap:8px}
+  #bar{flex-wrap:wrap;gap:6px 8px;padding:calc(env(safe-area-inset-top,0px) + 6px) 12px 8px}
+  .brand h1{font-size:16px}
+  #badge{margin-left:auto}
+  .search{order:5;flex:1 1 calc(100% - 140px);max-width:none;margin-left:0}
+  .tools{order:6}
+  .tools .lbl{display:none}
+  .tools .btn{padding:6px 9px}
+  #time{left:var(--gap);align-items:stretch}
+  #time .trow{gap:5px 6px;justify-content:space-between}
+  #spd{gap:3px} #spd .btn{padding:3px 6px}
+  #clk{font-size:11px}
+  #side{left:var(--gap);right:var(--gap);width:auto;top:auto;height:44%;bottom:calc(var(--gap) + env(safe-area-inset-bottom,0px))}
+  #time{top:auto;bottom:calc(44% + 2*var(--gap) + env(safe-area-inset-bottom,0px));max-width:calc(100vw - 2*var(--gap));padding:4px 6px}
+  #tour{bottom:auto;top:calc(var(--bar-top,100px) + var(--gap))}
+  .pitch div{grid-template-columns:1fr;gap:0}
+  .dialog{padding:18px 16px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<canvas id="c" tabindex="0" aria-label="3D globe of tracked objects. Drag or use arrow keys to rotate, plus and minus to zoom, Shift with drag or arrows to pan."></canvas>
+<div id="ring"><i></i></div><div class="mk a" id="mkA"><i>A</i></div><div class="mk b" id="mkB"><i>B</i></div>
+<div id="hls"></div>
+<div id="tip" role="tooltip"></div>
+
+<header id="bar">
+  <div class="brand"><h1>Orbit<span>Watch</span></h1><p>Where every tracked satellite and piece of space junk is right now, and why it matters.</p></div>
+  <button id="badge" data-mode="loading" title="Data source and freshness. Click for details."><span class="d"></span><span id="badgeTxt">LOADING DATA</span></button>
+  <div class="search" role="search">
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.8"/></svg>
+    <input id="q" type="search" placeholder="Search: name or catalog # (ISS, 25544)" autocomplete="off" aria-label="Search satellites and debris by name or catalog number" aria-controls="qres" aria-expanded="false" role="combobox" aria-autocomplete="list">
+    <ul id="qres" role="listbox" hidden></ul>
+  </div>
+  <div class="tools">
+    <button class="btn" id="bTour" title="A 60-second guided walkthrough"><span aria-hidden="true">▶</span><span class="lbl">Tour</span></button>
+    <button class="btn" id="bLearn" title="How tracking works, why debris matters, data sources and methodology"><span aria-hidden="true">?</span><span class="lbl">Learn</span></button>
+    <button class="btn" id="bReset" title="Restore the default camera, filters and time"><span aria-hidden="true">⟲</span><span class="lbl">Reset view</span></button>
+  </div>
+</header>
+
+<div id="time" aria-label="Time controls">
+  <div class="trow"><span id="tmode" class="live">LIVE</span><span id="clk" class="mono"></span>
+  <div id="spd"></div></div>
+  <div id="filt" hidden><span id="filtTxt" class="note"></span> <button class="btn sm" id="filtClear">Clear filters</button></div>
+  <div id="dstat" hidden role="status" aria-live="polite"><span id="dstatTxt" class="note"></span> <button class="btn sm" id="dstatRetry">Retry</button><button class="btn sm" id="dstatInfo">Details</button></div>
+</div>
+
+<aside id="side" aria-label="Mission console">
+  <div id="tabs" role="tablist">
+    <button role="tab" id="t-obj" aria-controls="p-obj" aria-selected="true">Object</button>
+    <button role="tab" id="t-lay" aria-controls="p-lay" aria-selected="false">Layers</button>
+    <button role="tab" id="t-sta" aria-controls="p-sta" aria-selected="false">Stats</button>
+    <button role="tab" id="t-saf" aria-controls="p-saf" aria-selected="false">Safety</button>
+    <button role="tab" id="t-sky" aria-controls="p-sky" aria-selected="false">Your sky</button>
+  </div>
+
+  <section class="pane" id="p-obj" role="tabpanel" aria-labelledby="t-obj">
+    <div id="sel"><p class="note">Click any dot on the globe, or search above, to inspect an object.</p></div>
+    <h2>Suggested objects</h2>
+    <div class="chips" id="sugg"></div>
+  </section>
+
+  <section class="pane" id="p-lay" role="tabpanel" aria-labelledby="t-lay" hidden>
+    <h2>Object types</h2>
+    <div class="legend" id="types"></div>
+    <h2>Orbit regimes</h2>
+    <div class="legend" id="regimes"></div>
+    <div class="chip-band" id="bandChip"><span class="tag approx">filter</span><span id="bandTxt"></span><button class="btn sm" id="bandClear">Clear</button></div>
+    <h2>Educational highlights</h2>
+    <label class="legend"><span style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="hlOn" checked> Label notable objects on the globe</span></label>
+    <h2>Lines and markers</h2>
+    <div class="legend" id="lines"></div>
+    <p class="note">Dots are drawn far larger than the objects. A satellite is a few metres across; at this scale it would be invisible.</p>
+  </section>
+
+  <section class="pane" id="p-sta" role="tabpanel" aria-labelledby="t-sta" hidden>
+    <h2>Loaded objects</h2>
+    <div class="stats" id="tiles"></div>
+    <p class="note" id="countDef"></p>
+    <h2>Altitude distribution <span class="note" style="text-transform:none;letter-spacing:0">(low Earth orbit, 50 km bands)</span></h2>
+    <canvas id="hist" tabindex="0" aria-label="Altitude histogram. Use left and right arrows to move between bands and Enter to show only that band on the globe."></canvas>
+    <div class="chips note" style="gap:10px;margin-top:4px" id="histKey"></div>
+    <p class="note" id="histInfo">Hover or use arrow keys for counts. Click a band to show only it on the globe.</p>
+    <h2>By orbit regime</h2>
+    <div class="bars" id="regBars"></div>
+    <h2>What this data shows</h2>
+    <div id="insights"></div>
+    <h2>Data freshness</h2>
+    <div class="kv" id="fresh"></div>
+  </section>
+
+  <section class="pane" id="p-saf" role="tabpanel" aria-labelledby="t-saf" hidden>
+    <h2>Why debris is a problem</h2>
+    <p>In low orbit everything moves at about 7.5 km/s, so even a 1 cm fragment hits with the energy of a hand grenade. Every collision makes more fragments, which raises the chance of the next one.</p>
+    <h2>Compare two objects</h2>
+    <div id="cmp"></div>
+    <h2>Collision risk</h2>
+    <div class="warnbox"><b>Not supported here.</b> Judging collision risk needs validated conjunction data with position uncertainty, such as CelesTrak <a href="https://celestrak.org/SOCRATES/" target="_blank" rel="noopener">SOCRATES</a> or Space-Track conjunction messages. OrbitWatch does not load that data, so it never shows a collision probability. A close approach is two objects passing near each other. A collision means they actually hit.</div>
+    <h2>Breakup simulator <span class="tag sim">simulated</span></h2>
+    <p class="note">See how one breakup spreads into a ring of debris. This creates pretend fragments from the selected object. Nothing real is changed, and the fragments are left out of all statistics.</p>
+    <div class="row-btns"><button class="btn danger" id="bBoom">Simulate a breakup of the selected object</button><button class="btn" id="bBoomClear" disabled>Clear simulation</button></div>
+    <p class="note" id="boomInfo"></p>
+  </section>
+
+  <section class="pane" id="p-sky" role="tabpanel" aria-labelledby="t-sky" hidden>
+    <h2>Your location</h2>
+    <div class="row-btns" style="margin-top:0"><button class="btn" id="geo">Use my location</button><span class="note" style="align-self:center">or click the globe while this tab is open</span></div>
+    <div id="where" class="note"></div>
+    <h2>Next ISS pass</h2>
+    <div id="issPass" class="note">Set a location first.</div>
+    <h2>Overhead now <span class="tag approx">approx.</span></h2>
+    <div id="over" class="note">Set a location to see what is passing above you.</div>
+    <h2>Ground track of the selected object</h2>
+    <canvas id="gt" width="720" height="360" aria-label="Map of the selected object's ground track"></canvas>
+    <p class="note">White: the next 2 hours 15 minutes. Faint: the last 45 minutes. Red dot: your location.</p>
+  </section>
+</aside>
+
+<div id="loading" role="status" aria-live="polite">
+  <b id="ldTitle">Loading orbital data</b>
+  <div class="prog"><i id="ldBar"></i></div>
+  <div class="note" id="ldText">Starting…</div>
+  <div class="row-btns" id="ldSkip" hidden><button class="btn sm" id="bSkip">Use demo data instead</button></div>
+</div>
+<div id="glfail" class="card" hidden role="alert"><b>3D view unavailable</b><p class="note" id="glfailTxt"></p></div>
+
+<div class="overlay" id="intro" hidden role="dialog" aria-modal="true" aria-labelledby="introH">
+  <div class="dialog">
+    <h3 id="introH" style="font-size:24px">Orbit<span style="color:var(--accent)">Watch</span></h3>
+    <p class="lead">See where tracked satellites and space debris are right now, and why the crowding matters.</p>
+    <div class="pitch">
+      <div><b>Problem</b><span>Thousands of satellites and pieces of debris share the same orbits. Fragments hit at around 10 km/s, and every collision creates more.</span></div>
+      <div><b>Solution</b><span>OrbitWatch loads public orbital data and computes each object's position with the standard SGP4 model, then puts them on one globe you can explore.</span></div>
+      <div><b>Who it helps</b><span>Anyone who relies on GPS, weather forecasts, satellite internet or space science, which is everyone.</span></div>
+    </div>
+    <p class="note" id="introData"></p>
+    <h2>Start with one of these</h2>
+    <div class="chips" id="introSugg"></div>
+    <div class="row-btns" style="margin-top:16px"><button class="btn primary" id="iTour">Take the 60-second tour</button><button class="btn" id="iClose">Explore on my own</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="learn" hidden role="dialog" aria-modal="true" aria-labelledby="learnH">
+  <div class="dialog">
+    <button class="btn sm x" data-close aria-label="Close">Close</button>
+    <h3 id="learnH" style="font-size:20px">Learn: orbits, debris and this data</h3>
+    <h2 id="l-how">How orbital tracking works</h2>
+    <p>Radar and telescopes on the ground, mainly the US Space Surveillance Network, watch objects as they pass overhead. Analysts fit an orbit to those observations and publish it as a short set of numbers called orbital elements (a TLE or OMM). CelesTrak redistributes these elements for free. To find where an object is at any moment, OrbitWatch feeds its elements into SGP4, the standard model made for this data. SGP4 accounts for Earth's bulge and air drag.</p>
+    <h2 id="l-small">Why small debris is dangerous</h2>
+    <p>Speed, not size, makes debris deadly. Two objects in low orbit typically meet at about 10 km/s, which is ten times faster than a rifle bullet. Kinetic energy is ½ × mass × speed², so a 1 cm aluminium ball weighing 1.4 g carries about 70 kJ at 10 km/s. That is roughly the energy of 17 g of TNT. Objects smaller than about 10 cm usually are not tracked at all, and ESA estimates there are around a million fragments between 1 and 10 cm.</p>
+    <h2 id="l-reg">Low, medium and geostationary orbit</h2>
+    <div class="tablewrap"><table>
+      <tr><th>Regime</th><th>Altitude</th><th>One orbit takes</th><th>Used for</th></tr>
+      <tr><td>LEO, low Earth orbit</td><td>up to 2,000 km</td><td>about 90–127 min</td><td>space stations, Earth imaging, Starlink, most debris</td></tr>
+      <tr><td>MEO, medium Earth orbit</td><td>2,000–35,786 km</td><td>2–24 h (GPS: 12 h)</td><td>navigation: GPS, Galileo, GLONASS, BeiDou</td></tr>
+      <tr><td>GEO, geostationary orbit</td><td>35,786 km over the equator</td><td>23 h 56 min, one Earth turn</td><td>weather and TV satellites that stay above one spot</td></tr>
+      <tr><td>HEO, highly elliptical</td><td>swings from low to very high</td><td>varies (Molniya: 12 h)</td><td>coverage of far-north regions</td></tr>
+    </table></div>
+    <h2 id="l-kess">The Kessler cascade</h2>
+    <p>In 1978 NASA scientist Donald Kessler warned that once orbits get crowded enough, collisions create debris faster than air drag removes it, and each collision makes the next more likely. Two events in this data show how fast clouds form. In 2007 an anti-satellite missile test destroyed the Fengyun-1C weather satellite. In 2009 the working Iridium 33 and the dead Cosmos 2251 collided by accident, the first collision between two intact satellites.</p>
+    <h2 id="l-why">Why this matters</h2>
+    <p><b>Communications:</b> satellite internet, TV and phone links for ships, planes and remote areas. <b>Navigation:</b> GPS gives position and precise time to phones, banks and power grids. <b>Weather:</b> polar and geostationary weather satellites feed every forecast and storm warning. <b>Climate and Earth observation:</b> crops, wildfires, ice and sea level are monitored from orbit. <b>Exploration:</b> astronauts on the ISS have had to move the station out of the way of debris many times. If key orbits fill with fragments, all of these get riskier and more expensive.</p>
+    <h2 id="l-lim">Limits and uncertainty</h2>
+    <p>Positions from public elements are approximate: typically around a kilometre off when the elements are fresh, and drifting by kilometres per day as they age. Each object panel shows its element age. Solar activity changes air drag, which is the biggest source of error in low orbit. Some objects are not in public data, and most debris is too small to track. OrbitWatch loads only some CelesTrak groups, so its counts are a subset of the catalog. Clouds on the globe are decorative, and dots are not to scale.</p>
+    <h2 id="l-src">Data sources and methodology</h2>
+    <div id="srcList"></div>
+    <h2 id="l-real">What is real, approximate or simulated</h2>
+    <div class="tablewrap"><table id="realTbl"></table></div>
+  </div>
+</div>
+
+<div class="overlay" id="sources" hidden role="dialog" aria-modal="true" aria-labelledby="srcH">
+  <div class="dialog">
+    <button class="btn sm x" data-close aria-label="Close">Close</button>
+    <h3 id="srcH" style="font-size:20px">Data source</h3>
+    <div id="srcBody"></div>
+    <div class="row-btns"><button class="btn" id="bRefresh">Refresh data</button><button class="btn" id="bDemo">Switch to demo data</button><button class="btn" id="bMethod">Methodology</button></div>
+  </div>
+</div>
+
+<div id="tour" hidden role="dialog" aria-labelledby="tourH" aria-live="polite">
+  <div class="steps" id="tourSteps"></div>
+  <b id="tourH"></b>
+  <p id="tourTxt" style="margin:6px 0 10px"></p>
+  <div class="row-btns" style="margin-top:0"><button class="btn sm" id="tPrev">Back</button><button class="btn sm primary" id="tNext">Next</button><button class="btn sm" id="tEnd" style="margin-left:auto">End tour</button></div>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@6.0.2/dist/satellite.min.js"></script>
+<script>
+/*__APP_JS__*/
+</script>

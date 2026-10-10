@@ -1,0 +1,16 @@
+{
+  "name": "orbitwatch",
+  "version": "4.1.0",
+  "private": true,
+  "description": "OrbitWatch: tracked satellites and space debris on a 3D globe, computed with SGP4 from CelesTrak orbital elements served by a small caching server.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/server.mjs",
+    "test": "node --test test/server.test.mjs test/build.test.mjs",
+    "build:page": "node tools/build-page.mjs",
+    "fetch-data": "node tools/fetch-celestrak.mjs --out public/data/celestrak.json"
+  }
+}
